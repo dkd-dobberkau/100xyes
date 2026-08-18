@@ -1,0 +1,14 @@
+# binaries
+yesapi
+/dist/
+
+# go
+*.test
+*.out
+
+# os / editor
+.DS_Store
+*.swp
+
+# logs
+*.log

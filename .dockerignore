@@ -1,0 +1,4 @@
+yesapi
+*.log
+.git
+.gitignore
