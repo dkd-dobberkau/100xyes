@@ -4,7 +4,7 @@ An HTTP API with exactly one opinion, expressed 100 different ways across
 10 categories. No rate limit. No is not implemented.
 
 ```
-$ curl https://100xyes.com/v1/yes?category=dao
+$ curl "https://100xyes.com/v1/yes?category=dao"
 {
   "category": "dao",
   "text": "The way opens; walk it.",
