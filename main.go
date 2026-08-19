@@ -3,14 +3,19 @@
 package main
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"io/fs"
 	"log"
 	"math/rand"
+	"mime"
 	"net/http"
 	"os"
+	"path"
 	"strings"
 	"time"
 )
@@ -21,12 +26,12 @@ import (
 //go:embed web/index.html
 var indexHTML []byte
 
-// vendorFiles holds the self-hosted fonts and stylesheet. They are served from
-// this origin rather than fonts.googleapis.com so that visiting the page
-// discloses nothing to a third party.
+// embeddedAssets holds the page stylesheet and the self-hosted fonts. The
+// fonts are served from this origin rather than fonts.googleapis.com so that
+// visiting the page discloses nothing to a third party.
 //
-//go:embed web/vendor
-var vendorFiles embed.FS
+//go:embed web/assets web/vendor
+var embeddedAssets embed.FS
 
 // Yes represents a single affirmative response.
 type Yes struct {
@@ -232,28 +237,117 @@ func rootHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write(indexHTML)
 }
 
-// vendorHandler serves the embedded fonts and stylesheet under /vendor/. The
-// contents are fixed at build time, so they can be cached aggressively; a new
-// deploy ships a new binary rather than mutating these files.
-func vendorHandler() (http.Handler, error) {
-	sub, err := fs.Sub(vendorFiles, "web")
+// staticAsset is an embedded file together with the validator and cache
+// policy it is served under.
+type staticAsset struct {
+	data         []byte
+	contentType  string
+	etag         string
+	cacheControl string
+}
+
+// buildStaticAssets indexes the embedded assets once at startup, keyed by the
+// URL path they are served at.
+//
+// Serving from a map rather than http.FileServer means only concrete files
+// have an entry, so directories cannot be enumerated at all, and it lets each
+// file carry a precomputed ETag. The ETag matters because embed.FS entries
+// have no modification time, so the usual Last-Modified revalidation that
+// http.FileServer relies on is unavailable.
+func buildStaticAssets() (map[string]staticAsset, error) {
+	// Not in Go's built-in table, and the distroless runtime image has no
+	// /etc/mime.types to fall back on.
+	if err := mime.AddExtensionType(".woff2", "font/woff2"); err != nil {
+		return nil, err
+	}
+
+	assets := map[string]staticAsset{}
+
+	err := fs.WalkDir(embeddedAssets, "web", func(p string, entry fs.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return err
+		}
+
+		data, err := embeddedAssets.ReadFile(p)
+		if err != nil {
+			return err
+		}
+
+		contentType := mime.TypeByExtension(path.Ext(p))
+		if contentType == "" {
+			contentType = http.DetectContentType(data)
+		}
+
+		// Font files are versioned by name and never change in place, so they
+		// can be cached outright. The stylesheet changes whenever the design
+		// does, so it revalidates against its ETag instead of going stale.
+		cacheControl := "no-cache"
+		if strings.HasPrefix(p, "web/vendor/") {
+			cacheControl = "public, max-age=31536000, immutable"
+		}
+
+		sum := sha256.Sum256(data)
+
+		assets["/"+strings.TrimPrefix(p, "web/")] = staticAsset{
+			data:         data,
+			contentType:  contentType,
+			etag:         `"` + hex.EncodeToString(sum[:16]) + `"`,
+			cacheControl: cacheControl,
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
 
-	files := http.FileServer(http.FS(sub))
+	return assets, nil
+}
 
+// staticHandler serves the indexed assets. Anything without an exact entry is
+// a 404, including directory paths and any attempt to escape the asset tree.
+func staticHandler(assets map[string]staticAsset) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// http.FileServer renders a browsable index for directory paths.
-		// Nothing here should be enumerable, so only serve concrete files.
-		if strings.HasSuffix(r.URL.Path, "/") {
+		// Serve each asset under exactly one URL. Without this, path.Clean
+		// would happily resolve "/assets/site.css/" and "/assets/./site.css"
+		// to the same file, aliasing it across several cache keys.
+		if r.URL.Path != path.Clean(r.URL.Path) {
 			http.NotFound(w, r)
 			return
 		}
 
-		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-		files.ServeHTTP(w, r)
-	}), nil
+		asset, ok := assets[r.URL.Path]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+
+		w.Header().Set("Content-Type", asset.contentType)
+		w.Header().Set("Cache-Control", asset.cacheControl)
+		w.Header().Set("ETag", asset.etag)
+
+		// ServeContent honours the ETag set above, answering an unchanged
+		// If-None-Match with 304 instead of resending the body.
+		http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(asset.data))
+	})
+}
+
+// securityHeaders applies defence-in-depth headers to every response. The page
+// loads no scripts and no images, and every stylesheet and font comes from
+// this origin, so the policy can deny each remaining source outright.
+func securityHeaders(next http.Handler) http.Handler {
+	const policy = "default-src 'none'; " +
+		"style-src 'self'; " +
+		"font-src 'self'; " +
+		"base-uri 'none'; " +
+		"form-action 'none'; " +
+		"frame-ancestors 'none'"
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Security-Policy", policy)
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		next.ServeHTTP(w, r)
+	})
 }
 
 // healthHandler is a liveness probe for the container platform. It reports
@@ -292,14 +386,16 @@ func main() {
 		os.Exit(runHealthCheck(addr))
 	}
 
-	vendor, err := vendorHandler()
+	assets, err := buildStaticAssets()
 	if err != nil {
-		log.Fatalf("embedded vendor assets unusable: %v", err)
+		log.Fatalf("embedded assets unusable: %v", err)
 	}
+	static := staticHandler(assets)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", rootHandler)
-	mux.Handle("/vendor/", vendor)
+	mux.Handle("/assets/", static)
+	mux.Handle("/vendor/", static)
 	mux.HandleFunc("/health", healthHandler)
 	mux.HandleFunc("/v1/yes", yesHandler)
 	mux.HandleFunc("/v1/types", typesHandler)
@@ -309,7 +405,7 @@ func main() {
 	// open indefinitely on a public endpoint.
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           mux,
+		Handler:           securityHeaders(mux),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,

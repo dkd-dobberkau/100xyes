@@ -17,7 +17,8 @@ $ curl https://100xyes.com/v1/yes?category=dao
 | Method | Path                    | Description                        |
 |--------|--------------------------|-------------------------------------|
 | GET    | `/`                      | the landing page                    |
-| GET    | `/vendor/…`              | self-hosted fonts and stylesheet    |
+| GET    | `/assets/…`              | the page stylesheet                 |
+| GET    | `/vendor/…`              | self-hosted fonts                   |
 | GET    | `/health`                | liveness probe                      |
 | GET    | `/v1/yes`                | one random yes, any category        |
 | GET    | `/v1/yes?category=dao`   | random yes from one category        |
@@ -55,6 +56,23 @@ Fonts (Space Mono, Rock Salt) are self-hosted under `web/vendor/` and served
 from `/vendor/`, so loading the page sends no request to `fonts.googleapis.com`
 or `fonts.gstatic.com` and discloses no visitor IP to a third party. The page
 has **no external requests at all**.
+
+Because everything the page loads comes from this origin, and it loads no
+scripts and no images, every response carries a strict policy:
+
+```
+Content-Security-Policy: default-src 'none'; style-src 'self'; font-src 'self';
+                         base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+X-Content-Type-Options: nosniff
+Referrer-Policy: no-referrer
+```
+
+This is why the page styles live in `web/assets/site.css` rather than an inline
+`<style>` block, and why no element carries a `style=` attribute: either would
+require `'unsafe-inline'` in `style-src` and defeat the point. **Keep it that
+way when editing the page.**
+
+TLS and HSTS are the ingress layer's job and are not set here.
 
 To refresh the fonts, re-fetch the Google Fonts CSS with a browser
 `User-Agent` (otherwise Google serves older formats than woff2), download each

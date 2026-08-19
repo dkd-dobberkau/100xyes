@@ -12,3 +12,7 @@ yesapi
 
 # logs
 *.log
+
+# playwright mcp screenshots / logs
+.playwright-mcp/
+/*.png
