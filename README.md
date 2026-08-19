@@ -17,6 +17,7 @@ $ curl https://100xyes.com/v1/yes?category=dao
 | Method | Path                    | Description                        |
 |--------|--------------------------|-------------------------------------|
 | GET    | `/`                      | the landing page                    |
+| GET    | `/vendor/…`              | self-hosted fonts and stylesheet    |
 | GET    | `/health`                | liveness probe                      |
 | GET    | `/v1/yes`                | one random yes, any category        |
 | GET    | `/v1/yes?category=dao`   | random yes from one category        |
@@ -49,6 +50,16 @@ statically compiled, runs as `nonroot`, and lands at roughly 10-15 MB.
 The one-page site lives in `web/index.html` and is embedded into the binary
 with `go:embed`, so it is served at `/` by the same process as the API. No
 build step, no separate static host, one container to deploy.
+
+Fonts (Space Mono, Rock Salt) are self-hosted under `web/vendor/` and served
+from `/vendor/`, so loading the page sends no request to `fonts.googleapis.com`
+or `fonts.gstatic.com` and discloses no visitor IP to a third party. The page
+has **no external requests at all**.
+
+To refresh the fonts, re-fetch the Google Fonts CSS with a browser
+`User-Agent` (otherwise Google serves older formats than woff2), download each
+`url()` target into `web/vendor/fonts/`, and point the `url()` paths in
+`web/vendor/css/fonts.css` at `../fonts/`.
 
 ## Configuration
 

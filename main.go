@@ -3,9 +3,10 @@
 package main
 
 import (
-	_ "embed"
+	"embed"
 	"encoding/json"
 	"io"
+	"io/fs"
 	"log"
 	"math/rand"
 	"net/http"
@@ -19,6 +20,13 @@ import (
 //
 //go:embed web/index.html
 var indexHTML []byte
+
+// vendorFiles holds the self-hosted fonts and stylesheet. They are served from
+// this origin rather than fonts.googleapis.com so that visiting the page
+// discloses nothing to a third party.
+//
+//go:embed web/vendor
+var vendorFiles embed.FS
 
 // Yes represents a single affirmative response.
 type Yes struct {
@@ -224,6 +232,30 @@ func rootHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write(indexHTML)
 }
 
+// vendorHandler serves the embedded fonts and stylesheet under /vendor/. The
+// contents are fixed at build time, so they can be cached aggressively; a new
+// deploy ships a new binary rather than mutating these files.
+func vendorHandler() (http.Handler, error) {
+	sub, err := fs.Sub(vendorFiles, "web")
+	if err != nil {
+		return nil, err
+	}
+
+	files := http.FileServer(http.FS(sub))
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// http.FileServer renders a browsable index for directory paths.
+		// Nothing here should be enumerable, so only serve concrete files.
+		if strings.HasSuffix(r.URL.Path, "/") {
+			http.NotFound(w, r)
+			return
+		}
+
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		files.ServeHTTP(w, r)
+	}), nil
+}
+
 // healthHandler is a liveness probe for the container platform. It reports
 // the only status this service is capable of.
 func healthHandler(w http.ResponseWriter, r *http.Request) {
@@ -260,8 +292,14 @@ func main() {
 		os.Exit(runHealthCheck(addr))
 	}
 
+	vendor, err := vendorHandler()
+	if err != nil {
+		log.Fatalf("embedded vendor assets unusable: %v", err)
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", rootHandler)
+	mux.Handle("/vendor/", vendor)
 	mux.HandleFunc("/health", healthHandler)
 	mux.HandleFunc("/v1/yes", yesHandler)
 	mux.HandleFunc("/v1/types", typesHandler)
