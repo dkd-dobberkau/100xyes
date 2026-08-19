@@ -89,14 +89,38 @@ To refresh the fonts, re-fetch the Google Fonts CSS with a browser
 
 The service is stateless with negligible resource needs, so any small VM or
 container host is enough. It runs at **https://100xyes.com**, hosted on
-mittwald mStudio (project `p-c3xmwk`):
+mittwald mStudio (project `p-c3xmwk`).
 
-1. A push to `main` builds and publishes the image to
-   `ghcr.io/dkd-dobberkau/100xyes:latest` via GitHub Actions. The GHCR package
-   must be public, otherwise mStudio needs a registry pull secret.
-2. In the mStudio project, create a container from that image exposing
-   port 8080.
-3. Attach an ingress for `100xyes.com` pointing at the container.
+A push to `main` builds and publishes the image to
+`ghcr.io/dkd-dobberkau/100xyes:latest` via GitHub Actions. The GHCR package is
+public, so mStudio pulls it without a registry secret.
+
+That push does **not** redeploy anything. To roll the new image out:
+
+```
+mw stack deploy -s <stack-id> -c docker-compose.yml
+```
+
+`docker-compose.yml` pins the service to `:latest`, so a deploy always picks
+up the most recent build. Find the stack id with `mw stack list -p p-c3xmwk`.
+
+Routing is already in place and only needs redoing if the container is
+recreated with a new id:
+
+| Hostname                 | Target                        |
+|--------------------------|-------------------------------|
+| `100xyes.com`            | container, port `8080/tcp`    |
+| `p-c3xmwk.project.space` | container, port `8080/tcp`    |
+| `www.100xyes.com`        | 301 to `https://100xyes.com`  |
+
+```
+mw domain virtualhost update <virtualhost-id> \
+  --path-to-container /:<container-uuid>:8080/tcp
+```
+
+Note that `virtualhost update` replaces *all* paths of a virtual host, and
+that it needs mittwald CLI 1.20 or newer. TLS and HSTS are handled by the
+mStudio ingress, not by this service.
 
 Health checks target `GET /health`, which returns `{"status":"yes"}`. The
 Docker `HEALTHCHECK` runs `/yesapi -healthcheck`, which probes that endpoint

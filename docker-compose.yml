@@ -1,0 +1,11 @@
+services:
+  web:
+    image: ghcr.io/dkd-dobberkau/100xyes:latest
+    restart: always
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+    # No healthcheck here on purpose: the image already declares one
+    # (/yesapi -healthcheck), and repeating it would be a second place to
+    # keep in sync. No volumes either, the service holds no state.
