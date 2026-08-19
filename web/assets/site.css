@@ -136,6 +136,9 @@ header.letterhead .row{
 .terminal pre{
   margin:0;
   padding: 16px;
+  /* The browser default monospace would otherwise win over the inherited
+     body font, leaving the code samples in a different face than the page. */
+  font-family: 'Space Mono', monospace;
   font-size: 13px;
   line-height: 1.75;
   overflow-x: auto;
