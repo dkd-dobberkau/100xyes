@@ -25,6 +25,11 @@ jobs:
       - name: Build (sanity check)
         run: go build -o /dev/null .
 
+      # Needed for --platform builds: the default docker driver can only
+      # produce a single-architecture image.
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Log in to GHCR
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
@@ -37,7 +42,14 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
+          platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
+          # Both tags become manifest lists, so a host pulling :latest gets
+          # the variant matching its own architecture.
           tags: |
             ghcr.io/${{ github.repository }}:latest
             ghcr.io/${{ github.repository }}:${{ github.sha }}
+          # Buildx would otherwise attach a provenance attestation per
+          # platform, which GHCR lists as extra "unknown/unknown" entries
+          # beside the two real images.
+          provenance: false

@@ -46,7 +46,29 @@ docker run -p 8080:8080 yesapi
 ```
 
 The image is a multi-stage build (`golang:1.22-alpine` → `distroless/static`),
-statically compiled, runs as `nonroot`, and lands at roughly 10-15 MB.
+statically compiled, runs as `nonroot`, and lands at roughly 9 MB.
+
+### Multiple architectures
+
+`linux/amd64` and `linux/arm64` are both published, so `:latest` is a manifest
+list and every host pulls the variant matching itself — an Apple Silicon
+laptop included. Nothing here is architecture-specific: cgo is off, the binary
+is pure Go, and `distroless/static-debian12` exists for both.
+
+The build stage is pinned to `$BUILDPLATFORM` and reads buildx's `TARGETARCH`,
+so the foreign architecture is cross-compiled by Go rather than emulated under
+QEMU. To build one locally:
+
+```
+docker buildx build --platform linux/arm64 -t yesapi:arm64 --load .
+```
+
+`--load` only accepts a single platform. Building both at once produces a
+manifest list, which needs a registry to push to:
+
+```
+docker buildx build --platform linux/amd64,linux/arm64 -t <registry>/yesapi --push .
+```
 
 ## Landing page
 
@@ -106,9 +128,11 @@ The service is stateless with negligible resource needs, so any small VM or
 container host is enough. It runs at **https://100xyes.com**, hosted on
 mittwald mStudio (project `p-c3xmwk`).
 
-A push to `main` builds and publishes the image to
-`ghcr.io/dkd-dobberkau/100xyes:latest` via GitHub Actions. The GHCR package is
-public, so mStudio pulls it without a registry secret.
+A push to `main` builds and publishes the image for `linux/amd64` and
+`linux/arm64` to `ghcr.io/dkd-dobberkau/100xyes:latest` via GitHub Actions. The
+GHCR package is public, so mStudio pulls it without a registry secret, and the
+manifest list means it keeps working if the platform ever moves the container
+to arm hardware.
 
 That push does **not** redeploy anything. To roll the new image out:
 

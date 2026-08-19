@@ -1,5 +1,9 @@
 # --- Build stage ---
-FROM golang:1.22-alpine AS builder
+# Pinned to the machine doing the building rather than to the target platform:
+# the service is pure Go with cgo off, so it cross-compiles to any target from
+# here. Without this the arm64 image would be built under QEMU emulation on an
+# amd64 runner, which is the same result several minutes slower.
+FROM --platform=$BUILDPLATFORM golang:1.22-alpine AS builder
 
 WORKDIR /src
 
@@ -7,7 +11,12 @@ COPY go.mod ./
 COPY main.go ./
 COPY web/ ./web/
 
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/yesapi .
+# Supplied by buildx, one value per --platform entry.
+ARG TARGETOS=linux
+ARG TARGETARCH
+
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -ldflags="-s -w" -o /out/yesapi .
 
 # --- Runtime stage ---
 FROM gcr.io/distroless/static-debian12
