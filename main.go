@@ -3,13 +3,22 @@
 package main
 
 import (
+	_ "embed"
 	"encoding/json"
+	"io"
 	"log"
 	"math/rand"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
+
+// indexHTML is the landing page, baked into the binary so the service ships
+// as a single artifact: one container, one ingress, no static host alongside.
+//
+//go:embed web/index.html
+var indexHTML []byte
 
 // Yes represents a single affirmative response.
 type Yes struct {
@@ -203,15 +212,74 @@ func allHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(catalog)
 }
 
+// rootHandler serves the landing page at "/" and nothing else. The catch-all
+// pattern would otherwise match every unrouted path.
+func rootHandler(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write(indexHTML)
+}
+
+// healthHandler is a liveness probe for the container platform. It reports
+// the only status this service is capable of.
+func healthHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	io.WriteString(w, `{"status":"yes"}`+"\n")
+}
+
+// runHealthCheck probes the local /health endpoint and reports the result as
+// a process exit code. Docker's HEALTHCHECK invokes the binary in this mode
+// because the distroless runtime image ships no shell and no curl.
+func runHealthCheck(addr string) int {
+	client := &http.Client{Timeout: 2 * time.Second}
+
+	resp, err := client.Get("http://127.0.0.1" + addr + "/health")
+	if err != nil {
+		return 1
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return 1
+	}
+	return 0
+}
+
 func main() {
+	// mittwald and most container platforms inject the listen port.
+	addr := ":8080"
+	if port := os.Getenv("PORT"); port != "" {
+		addr = ":" + port
+	}
+
+	if len(os.Args) > 1 && os.Args[1] == "-healthcheck" {
+		os.Exit(runHealthCheck(addr))
+	}
+
 	mux := http.NewServeMux()
+	mux.HandleFunc("/", rootHandler)
+	mux.HandleFunc("/health", healthHandler)
 	mux.HandleFunc("/v1/yes", yesHandler)
 	mux.HandleFunc("/v1/types", typesHandler)
 	mux.HandleFunc("/v1/all", allHandler)
 
-	addr := ":8080"
+	// Explicit timeouts so a slow or stalled client cannot hold a connection
+	// open indefinitely on a public endpoint.
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+
 	log.Printf("Yes-as-a-Service listening on %s", addr)
 	log.Printf("Try: curl 'localhost%s/v1/yes'", addr)
 	log.Printf("Or:  curl 'localhost%s/v1/yes?category=dao'", addr)
-	log.Fatal(http.ListenAndServe(addr, mux))
+	log.Fatal(srv.ListenAndServe())
 }
