@@ -17,6 +17,8 @@ $ curl "https://100xyes.com/v1/yes?category=dao"
 | Method | Path                    | Description                        |
 |--------|--------------------------|-------------------------------------|
 | GET    | `/`                      | the landing page                    |
+| GET    | `/playground`            | try the API in the browser          |
+| GET    | `/playground?category=…` | …in one category                    |
 | GET    | `/assets/…`              | the page stylesheet                 |
 | GET    | `/vendor/…`              | self-hosted fonts                   |
 | GET    | `/health`                | liveness probe                      |
@@ -52,6 +54,18 @@ The one-page site lives in `web/index.html` and is embedded into the binary
 with `go:embed`, so it is served at `/` by the same process as the API. No
 build step, no separate static host, one container to deploy.
 
+## Playground
+
+`/playground` is the browser-side way to pull a yes: it shows the `curl` line
+and the JSON response the API would return, with a link per category and a
+link to ask again. Its template is `web/playground.html`, also embedded.
+
+It is server-rendered on purpose. Doing the same thing with a modal that
+`fetch()`es the API would require `script-src` and `connect-src` in the policy
+below, and the point of that policy is that it grants neither — so every
+answer here is a plain page load instead. Responses carry `Cache-Control:
+no-store`, since each load picks a new phrase.
+
 Fonts (Space Mono, Rock Salt) are self-hosted under `web/vendor/` and served
 from `/vendor/`, so loading the page sends no request to `fonts.googleapis.com`
 or `fonts.gstatic.com` and discloses no visitor IP to a third party. The page
@@ -68,9 +82,10 @@ Referrer-Policy: no-referrer
 ```
 
 This is why the page styles live in `web/assets/site.css` rather than an inline
-`<style>` block, and why no element carries a `style=` attribute: either would
-require `'unsafe-inline'` in `style-src` and defeat the point. **Keep it that
-way when editing the page.**
+`<style>` block, why no element carries a `style=` attribute, and why the
+playground is a page load rather than a fetch: each of those would need the
+policy widened, and defeat the point. **Keep it that way when editing the
+pages.**
 
 TLS and HSTS are the ingress layer's job and are not set here.
 

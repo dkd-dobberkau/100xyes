@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Playground &mdash; Yes-as-a-Service</title>
+<link rel="stylesheet" href="/vendor/css/fonts.css">
+<link rel="stylesheet" href="/assets/site.css">
+</head>
+<body>
+
+<header class="letterhead">
+  <div class="wrap row">
+    <div><a href="/">Dept. of Unconditional<br>Affirmation</a></div>
+    <div class="align-right">Form YES&#8209;1&#8239;/&#8239;P<br>Counter Service</div>
+  </div>
+</header>
+
+<div class="hero wrap pg">
+{{- if not .NotFound}}
+  <div class="hero-stamp">YES</div>
+{{- end}}
+  <h1>Playground</h1>
+  <p class="tagline">Every link on this page is one real request to the API. No JavaScript runs here &mdash; each answer is a page load.</p>
+
+  <div class="terminal">
+    <div class="bar"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>
+{{- if .NotFound}}
+    <pre class="wrapped"><span class="cmt">$</span> curl -i "{{.RequestURL}}"
+<span class="red">HTTP/1.1 404 Not Found</span>
+unknown category (there is no 'no' here,
+but this category doesn't exist either)</pre>
+{{- else}}
+    <pre class="wrapped"><span class="cmt">$</span> curl "{{.RequestURL}}"
+{
+  <span class="grn">"category"</span>: <span class="grn">"{{.Pick.Category}}"</span>,
+  <span class="grn">"text"</span>: <span class="grn">"{{.Pick.Text}}"</span>,
+  <span class="grn">"confidence"</span>: 1.0
+}</pre>
+{{- end}}
+  </div>
+
+  <div class="cta-row pg-actions">
+{{- if .NotFound}}
+    <a class="btn btn-primary" href="/playground">Ask a category that exists</a>
+{{- else}}
+    <a class="btn btn-primary" href="{{.SelfURL}}">Ask again</a>
+{{- end}}
+    <a class="btn btn-secondary" href="{{.APIPath}}">Raw JSON</a>
+  </div>
+
+  <div class="chips-label">Pick a dialect</div>
+  <div class="chips">
+    <a class="chip{{if not .Category}} chip-on{{end}}"{{if not .Category}} aria-current="page"{{end}} href="/playground">any</a>
+{{- range .Categories}}
+    <a class="chip{{if .Current}} chip-on{{end}}"{{if .Current}} aria-current="page"{{end}} href="/playground?category={{.Slug}}">{{.Slug}}</a>
+{{- end}}
+  </div>
+
+  <div class="pg-hint">
+    Same data without the paper: <a href="/v1/yes">/v1/yes</a>,
+    <a href="/v1/types">/v1/types</a>, <a href="/v1/all">/v1/all</a>.
+  </div>
+</div>
+
+<footer>
+  <a href="/">back to the front page</a> &middot;
+  100xyes.com &mdash; personal experiment by Olivier Dobberkau &middot;
+  <a href="https://github.com/dkd-dobberkau/100xyes" target="_blank" rel="noopener noreferrer">source on GitHub</a>
+</footer>
+
+</body>
+</html>

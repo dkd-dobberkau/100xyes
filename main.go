@@ -8,12 +8,14 @@ import (
 	"embed"
 	"encoding/hex"
 	"encoding/json"
+	"html/template"
 	"io"
 	"io/fs"
 	"log"
 	"math/rand"
 	"mime"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"strings"
@@ -25,6 +27,13 @@ import (
 //
 //go:embed web/index.html
 var indexHTML []byte
+
+// playgroundHTML is the template behind /playground, the browser-side way to
+// pull a yes. It is a server-rendered page rather than a script that calls the
+// API, so the site keeps its script-free Content-Security-Policy.
+//
+//go:embed web/playground.html
+var playgroundHTML string
 
 // embeddedAssets holds the page stylesheet and the self-hosted fonts. The
 // fonts are served from this origin rather than fonts.googleapis.com so that
@@ -163,8 +172,51 @@ var catalog = []Yes{
 	{"multilingual", "Igen."},
 }
 
-// randSource is seeded once at startup for reasonably varied output.
-var randSource = rand.New(rand.NewSource(time.Now().UnixNano()))
+// errUnknownCategory is what the API says when asked for a category that does
+// not exist, which is as close to a no as this service gets.
+const errUnknownCategory = "unknown category (there is no 'no' here, but this category doesn't exist either)"
+
+// categoryPool returns every yes in one category, or the whole catalog when
+// category is empty. The bool reports whether the category exists at all.
+func categoryPool(category string) ([]Yes, bool) {
+	if category == "" {
+		return catalog, true
+	}
+
+	pool := make([]Yes, 0, len(catalog))
+	for _, y := range catalog {
+		if y.Category == category {
+			pool = append(pool, y)
+		}
+	}
+	return pool, len(pool) > 0
+}
+
+// categoryNames lists every distinct category, in catalog order.
+func categoryNames() []string {
+	seen := map[string]bool{}
+	names := make([]string, 0, 10)
+	for _, y := range catalog {
+		if !seen[y.Category] {
+			seen[y.Category] = true
+			names = append(names, y.Category)
+		}
+	}
+	return names
+}
+
+// randomYes picks one phrase out of a pool. It uses the package-level source
+// rather than a *rand.Rand of its own because that source is safe to call from
+// the several goroutines a net/http server hands requests to.
+func randomYes(pool []Yes) Yes {
+	return pool[rand.Intn(len(pool))]
+}
+
+// requestedCategory reads the "category" query parameter in the one normalized
+// form the catalog uses.
+func requestedCategory(r *http.Request) string {
+	return strings.ToLower(strings.TrimSpace(r.URL.Query().Get("category")))
+}
 
 // yesHandler returns a single random Yes, optionally filtered by
 // the "category" query parameter.
@@ -174,48 +226,26 @@ func yesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	category := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("category")))
-
-	pool := catalog
-	if category != "" {
-		filtered := make([]Yes, 0, len(catalog))
-		for _, y := range catalog {
-			if y.Category == category {
-				filtered = append(filtered, y)
-			}
-		}
-		if len(filtered) == 0 {
-			http.Error(w, "unknown category (there is no 'no' here, but this category doesn't exist either)", http.StatusNotFound)
-			return
-		}
-		pool = filtered
+	pool, ok := categoryPool(requestedCategory(r))
+	if !ok {
+		http.Error(w, errUnknownCategory, http.StatusNotFound)
+		return
 	}
-
-	pick := pool[randSource.Intn(len(pool))]
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(struct {
 		Yes
 		Confidence float64 `json:"confidence"`
-	}{pick, 1.0})
+	}{randomYes(pool), 1.0})
 }
 
 // typesHandler lists every distinct category available in the catalog.
 func typesHandler(w http.ResponseWriter, r *http.Request) {
-	seen := map[string]bool{}
-	var categories []string
-	for _, y := range catalog {
-		if !seen[y.Category] {
-			seen[y.Category] = true
-			categories = append(categories, y.Category)
-		}
-	}
-
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(struct {
 		Categories []string `json:"categories"`
 		Total      int      `json:"total_phrases"`
-	}{categories, len(catalog)})
+	}{categoryNames(), len(catalog)})
 }
 
 // allHandler returns the full catalog of 100 yeses, for anyone who
@@ -235,6 +265,90 @@ func rootHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write(indexHTML)
+}
+
+// playgroundCategory is one dialect chip on the playground page.
+type playgroundCategory struct {
+	Slug    string
+	Current bool
+}
+
+// playgroundView is everything the playground template renders.
+type playgroundView struct {
+	Category   string // the current filter, empty for "any"
+	Pick       Yes
+	NotFound   bool   // the requested category does not exist
+	RequestURL string // absolute URL, as shown in the curl line
+	APIPath    string // the same request as a link on this origin
+	SelfURL    string // this page again, keeping the category
+	Categories []playgroundCategory
+}
+
+// displayURL renders a path as the absolute URL a visitor would hand to curl.
+// The scheme comes from the ingress rather than from r.TLS, which is nil here
+// because TLS is terminated in front of this service.
+func displayURL(r *http.Request, requestPath string) string {
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	if forwarded := r.Header.Get("X-Forwarded-Proto"); forwarded == "http" || forwarded == "https" {
+		scheme = forwarded
+	}
+	return scheme + "://" + r.Host + requestPath
+}
+
+// playgroundHandler serves /playground: the same yes the API returns, rendered
+// on paper, with a link per category and a link to ask again.
+//
+// It is deliberately a page load rather than a fetch() from the landing page.
+// Calling the API from the browser would need 'script-src' and 'connect-src'
+// in the policy set by securityHeaders, and the point of that policy is that
+// it grants neither.
+func playgroundHandler(page *template.Template) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		category := requestedCategory(r)
+		pool, exists := categoryPool(category)
+
+		query := ""
+		if category != "" {
+			query = "?category=" + url.QueryEscape(category)
+		}
+
+		view := playgroundView{
+			Category:   category,
+			NotFound:   !exists,
+			RequestURL: displayURL(r, "/v1/yes"+query),
+			APIPath:    "/v1/yes" + query,
+			SelfURL:    "/playground" + query,
+		}
+		if exists {
+			view.Pick = randomYes(pool)
+		}
+		for _, name := range categoryNames() {
+			view.Categories = append(view.Categories, playgroundCategory{
+				Slug:    name,
+				Current: name == category,
+			})
+		}
+
+		// Render into a buffer first: a template failure halfway through would
+		// otherwise leave a truncated page already committed with a 200.
+		var rendered bytes.Buffer
+		if err := page.Execute(&rendered, view); err != nil {
+			log.Printf("playground render failed: %v", err)
+			http.Error(w, "the page failed to render, which is not a no", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		// Every load picks a new phrase, so nothing here may be cached.
+		w.Header().Set("Cache-Control", "no-store")
+		if view.NotFound {
+			w.WriteHeader(http.StatusNotFound)
+		}
+		w.Write(rendered.Bytes())
+	})
 }
 
 // staticAsset is an embedded file together with the validator and cache
@@ -392,10 +506,16 @@ func main() {
 	}
 	static := staticHandler(assets)
 
+	playgroundPage, err := template.New("playground").Parse(playgroundHTML)
+	if err != nil {
+		log.Fatalf("playground template unusable: %v", err)
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", rootHandler)
 	mux.Handle("/assets/", static)
 	mux.Handle("/vendor/", static)
+	mux.Handle("/playground", playgroundHandler(playgroundPage))
 	mux.HandleFunc("/health", healthHandler)
 	mux.HandleFunc("/v1/yes", yesHandler)
 	mux.HandleFunc("/v1/types", typesHandler)
