@@ -315,3 +315,65 @@ footer a:hover, footer a:focus-visible{
 }
 
 .align-right{ text-align: right; }
+
+/* legal pages — Impressum and Datenschutzerklärung.
+   These share the landing page's letterhead and footer; only the body copy
+   needs rules of its own. Kept here rather than in a <style> block for the
+   same reason as everything else in this file: the policy forbids inline. */
+.legal{ padding: 40px 0 20px; }
+.legal h1{
+  font-size: clamp(26px, 5vw, 38px);
+  margin: 0 0 6px;
+  line-height: 1.15;
+}
+.legal .legal-sub{
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--ink-soft);
+  margin: 0 0 34px;
+}
+.legal h2{
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--ink-soft);
+  margin: 34px 0 12px;
+  padding-top: 18px;
+  border-top: 1px solid var(--paper-line);
+}
+.legal h2:first-of-type{ border-top: 0; padding-top: 0; margin-top: 0; }
+.legal p, .legal li{ font-size: 13px; line-height: 1.85; }
+.legal p{ margin: 0 0 12px; }
+.legal ul{ margin: 0 0 14px; padding-left: 20px; }
+.legal li{ margin-bottom: 4px; }
+.legal address{ font-style: normal; margin: 0 0 14px; }
+.legal a{ text-decoration: underline; text-underline-offset: 2px; }
+
+/* A boxed block for the responsible party — the one thing a reader
+   looking for an Impressum is actually trying to find. */
+.legal-card{
+  background: var(--paper-white);
+  border: 1px solid var(--paper-line);
+  border-left: 3px solid var(--stamp);
+  padding: 16px 18px;
+  margin: 0 0 16px;
+  font-size: 13px;
+  line-height: 1.8;
+}
+.legal-note{
+  background: var(--paper-white);
+  border: 1px dashed var(--paper-line);
+  padding: 16px 18px;
+  margin: 0 0 22px;
+  font-size: 13px;
+  line-height: 1.8;
+}
+.legal-back{
+  display: inline-block;
+  margin-top: 26px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--ink-soft);
+}

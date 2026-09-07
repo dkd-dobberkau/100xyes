@@ -35,6 +35,17 @@ var indexHTML []byte
 //go:embed web/playground.html
 var playgroundHTML string
 
+// impressumHTML and datenschutzHTML are the provider identification required
+// by § 5 DDG and the privacy notice required by Art. 13 GDPR. They are plain
+// embedded pages rather than templates: nothing on them varies per request,
+// and keeping them static means they cannot fail to render.
+//
+//go:embed web/impressum.html
+var impressumHTML []byte
+
+//go:embed web/datenschutz.html
+var datenschutzHTML []byte
+
 // embeddedAssets holds the page stylesheet and the self-hosted fonts. The
 // fonts are served from this origin rather than fonts.googleapis.com so that
 // visiting the page discloses nothing to a third party.
@@ -265,6 +276,15 @@ func rootHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write(indexHTML)
+}
+
+// staticPageHandler serves one embedded HTML page. Both legal pages are
+// registered on exact paths, so unlike rootHandler this needs no path check.
+func staticPageHandler(page []byte) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write(page)
+	}
 }
 
 // playgroundCategory is one dialect chip on the playground page.
@@ -516,6 +536,8 @@ func main() {
 	mux.Handle("/assets/", static)
 	mux.Handle("/vendor/", static)
 	mux.Handle("/playground", playgroundHandler(playgroundPage))
+	mux.HandleFunc("/impressum.html", staticPageHandler(impressumHTML))
+	mux.HandleFunc("/datenschutz.html", staticPageHandler(datenschutzHTML))
 	mux.HandleFunc("/health", healthHandler)
 	mux.HandleFunc("/v1/yes", yesHandler)
 	mux.HandleFunc("/v1/types", typesHandler)
