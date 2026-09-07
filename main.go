@@ -14,6 +14,7 @@ import (
 	"log"
 	"math/rand"
 	"mime"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -468,6 +469,49 @@ func staticHandler(assets map[string]staticAsset) http.Handler {
 // securityHeaders applies defence-in-depth headers to every response. The page
 // loads no scripts and no images, and every stylesheet and font comes from
 // this origin, so the policy can deny each remaining source outright.
+// canonicalHosts are the names this service is meant to be found under.
+// The container platform also exposes it as <project>.project.space, which
+// serves the identical pages — indexable duplicate content under a second
+// domain unless something says otherwise.
+var canonicalHosts = map[string]bool{
+	"100xyes.com":     true,
+	"www.100xyes.com": true,
+}
+
+// isCanonicalHost reports whether a request arrived under a name we publish.
+// The Host header may carry a port (localhost:8080 in development), which is
+// not part of the name being matched.
+func isCanonicalHost(host string) bool {
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	return canonicalHosts[strings.ToLower(host)]
+}
+
+// robotsHandler answers /robots.txt, which was previously a 404. Crawlers
+// reaching the platform hostname are told to index nothing there; on the real
+// domain the file is permissive.
+func robotsHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	if !isCanonicalHost(r.Host) {
+		io.WriteString(w, "User-agent: *\nDisallow: /\n")
+		return
+	}
+	io.WriteString(w, "User-agent: *\nAllow: /\n")
+}
+
+// canonicalOnly tags responses served under any non-published hostname as
+// noindex. The header rather than a <meta> tag: it also covers the JSON
+// endpoints, and it applies to pages a crawler has already stored.
+func canonicalOnly(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !isCanonicalHost(r.Host) {
+			w.Header().Set("X-Robots-Tag", "noindex, nofollow")
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func securityHeaders(next http.Handler) http.Handler {
 	const policy = "default-src 'none'; " +
 		"style-src 'self'; " +
@@ -538,6 +582,7 @@ func main() {
 	mux.Handle("/playground", playgroundHandler(playgroundPage))
 	mux.HandleFunc("/impressum.html", staticPageHandler(impressumHTML))
 	mux.HandleFunc("/datenschutz.html", staticPageHandler(datenschutzHTML))
+	mux.HandleFunc("/robots.txt", robotsHandler)
 	mux.HandleFunc("/health", healthHandler)
 	mux.HandleFunc("/v1/yes", yesHandler)
 	mux.HandleFunc("/v1/types", typesHandler)
@@ -547,7 +592,7 @@ func main() {
 	// open indefinitely on a public endpoint.
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           securityHeaders(mux),
+		Handler:           securityHeaders(canonicalOnly(mux)),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
